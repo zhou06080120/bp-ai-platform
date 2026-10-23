@@ -87,3 +87,44 @@ docker compose up --build   # 本仓库 docker-compose.yml
 - **低置信拦截**：检索置信度低于阈值时不编造答案，改为固定兜底话术 + 就医建议；
 - **输入安全**：长度上限（500 字）+ 空输入拒绝 + 控制字符剥离；LLM 生成链路叠加 Prompt 注入模式拦截（指令覆盖 / 角色劫持 / 系统提示探测）；
 - **角色边界**：拒绝"扮演医生"类角色劫持——AI 始终以"健康教育参考"定位作答。
+
+## 7. 平台安全与水平扩展（P4）
+
+### 7.1 请求防护链（中间件洋葱模型）
+
+三服务统一注册顺序（先注册在内层）与执行顺序（由外向内）：
+
+```
+请求 → observability（X-Request-ID + Prometheus 记账，401/403/429 全统计）
+     → rate_limit（限流先于鉴权，防 API Key 暴力枚举）
+     → auth（X-API-Key 双级校验：普通 Key / 管理 Key）
+     → 路由（管理端点再叠加 require_admin 守卫 → 403）
+```
+
+- **双级 Key**：`BP_API_KEYS`（业务查询）/ `BP_ADMIN_KEYS`（管理端点，隐含普通权限），逗号分隔可配多把；两者均未配置 = 本地开发模式（不鉴权，零影响）；
+- **管理端点清单**：bp-monitor 的 `/reset`、`/approvals/*`；blood-pressure-agent 的 `/cache/clear`；blodd-answer-piper 的 `POST /annotations/{rid}`、`POST /iterate/apply`、`/admin/promote`、`/admin/refresh`。
+
+### 7.2 审计留痕（audit.py）
+
+所有管理端点写追加式 JSONL 审计日志（`logs/audit.jsonl`，`BP_AUDIT_PATH` 可覆盖）：
+每条记录 `{ts, actor, action, target, detail, request_id}`——`actor` 为 Key 的 SHA-256 前 8 位指纹（脱敏不落明文），`request_id` 与结构化日志、Prometheus 指标三方关联，形成完整追责链路。
+
+### 7.3 Skill 变更审批 gate（bp-monitor）
+
+`BP_APPROVAL_MODE=manual` 时，评估器通过的技能进化动作不直接落盘：
+
+```
+Reviewer 产出动作 → 红线扫描（合规拦截）→ request_approval()
+     ├─ auto（默认）：直接 apply_skill_action 落盘（向后兼容）
+     └─ manual：入 pending 队列 + approval_pending SSE 事件 → 不落盘
+                  ↓
+        GET /approvals（admin 查看）→ POST /approvals/{id}/approve（复用同一
+        apply_skill_action 落盘 + 重建索引 + 审计）| reject（仅标记 + 审计）
+```
+
+审批端点与后台 Worker 共用同一落盘入口 `apply_skill_action`，保证两条路径行为一致。
+
+### 7.4 LLM 网关与水平扩展（blood-pressure-agent）
+
+- **LLM 网关**（`llm_gateway.py`）：全部 LLM 调用收敛到单入口 `chat()`——内部统一完成 `llm_call_timer` 埋点、显式重试（`BP_LLM_MAX_RETRIES`）与主备切换（`BP_LLM_FALLBACK_*` 三项全配才启用备链路）；
+- **会话外置**（`conversation_store.py`）：会话存储抽象为 `ConversationStore`（get/put/append/clear/delete/list_sessions），内存实现默认、Redis 实现读 `BP_REDIS_URL`（连接失败自动回落内存并告警）；Redis 由 compose 的 `scale` profile 提供（`docker compose --profile scale up`），会话出进程后即可多副本水平扩展，其余两个服务本身无会话状态、天然可扩展。

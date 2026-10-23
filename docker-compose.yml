@@ -29,6 +29,9 @@ services:
     environment:
       - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60} # 限流阈值（0=关闭）
       - BP_LOG_FORMAT=${BP_LOG_FORMAT:-json} # 日志格式（json|text）
+      - BP_API_KEYS=${BP_API_KEYS:-}         # P4 普通级 API Key（逗号分隔；留空=本地开发放行）
+      - BP_ADMIN_KEYS=${BP_ADMIN_KEYS:-}     # P4 管理级 Key（/reset、/approvals 等管理端点）
+      - BP_APPROVAL_MODE=${BP_APPROVAL_MODE:-auto} # Skill 变更审批：auto=自动 | manual=人工审批
     env_file:
       - path: .env                           # 统一密钥注入（缺省不强制）
         required: false
@@ -47,9 +50,22 @@ services:
       - AGENT_MODEL=${AGENT_MODEL:-qwen-max}
       - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
       - BP_LOG_FORMAT=${BP_LOG_FORMAT:-json}
+      - BP_API_KEYS=${BP_API_KEYS:-}         # P4 普通级 API Key（逗号分隔；留空=本地开发放行）
+      - BP_ADMIN_KEYS=${BP_ADMIN_KEYS:-}     # P4 管理级 Key（/cache/clear 等管理端点）
+      - BP_LLM_FALLBACK_BASE_URL=${BP_LLM_FALLBACK_BASE_URL:-} # LLM 网关备链路（三项全配才启用）
+      - BP_LLM_FALLBACK_API_KEY=${BP_LLM_FALLBACK_API_KEY:-}
+      - BP_LLM_FALLBACK_MODEL=${BP_LLM_FALLBACK_MODEL:-}
+      - BP_REDIS_URL=${BP_REDIS_URL:-}       # 会话外置 Redis（留空=进程内存；配 redis://redis:6379/0 解锁多副本）
     env_file:
       - path: .env
         required: false
+    restart: unless-stopped
+
+  # ── 会话外置 Redis（可选）：--profile scale 启用，解锁 blood-pressure-agent 多副本 ──
+  redis:
+    image: redis:7-alpine
+    container_name: bp-redis
+    profiles: ["scale"]                      # 默认不启动：docker compose --profile scale up
     restart: unless-stopped
 
   # ── FAQ 语义检索引擎：Dense+BM25 混合检索 + CrossEncoder 精排 ───────────────
@@ -62,6 +78,8 @@ services:
     environment:
       - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
       - BP_LOG_FORMAT=${BP_LOG_FORMAT:-json}
+      - BP_API_KEYS=${BP_API_KEYS:-}         # P4 普通级 API Key（逗号分隔；留空=本地开发放行）
+      - BP_ADMIN_KEYS=${BP_ADMIN_KEYS:-}     # P4 管理级 Key（/annotations 写入、/iterate/apply、/admin/*）
     env_file:
       - path: .env
         required: false

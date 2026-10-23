@@ -36,9 +36,9 @@ flowchart LR
 | ONNX INT8 量化推理延迟（p50） | 34.7ms → **16.5ms**（2.28× 加速） | blodd-answer-piper |
 | CI 检索门禁（34 题黄金集） | Top1 94.1% / Top3 **100%** | blood-pressure-agent |
 | 评估器判别力门禁（12 对金标） | 好答放行 / 坏答拦截双 **100%** | bp-monitor-service-agent |
-| 单元测试 | 三仓合计 **394** 用例（79 + 217 + 98），CI 双版本矩阵全绿 | 三仓 CI |
+| 单元测试 | 三仓合计 **475** 用例（103 + 264 + 108），CI 双版本矩阵全绿 | 三仓 CI |
 
-## 工程化建设（P0 → P3）
+## 工程化建设（P0 → P4）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -46,8 +46,9 @@ flowchart LR
 | P1 生产加固 | 按 IP 滑动窗口限流、LLM SDK 显式重试、Worker 优雅关停、SSE 错误降级 | ✅ |
 | P2 可观测与门禁 | JSON 结构化日志 + request_id、Prometheus /metrics、LLM 调用埋点、CI 评估门禁（eval-gate） | ✅ |
 | P3 医疗合规 | 统一免责声明、输入校验、Prompt 注入拦截、密钥环境变量管理、平台总览仓库 | ✅ |
+| P4 平台安全 | API Key 双级鉴权、管理操作 JSONL 审计、Skill 变更人工审批 gate、LLM 网关主备切换、Redis 会话外置 | ✅ |
 
-三仓共享同款基建模块（`rate_limit.py` / `observability.py` / `compliance.py` / `evals/gate.py`），CI 均为 **lint → test(3.10/3.12) → eval-gate → docker** 五 job 全绿才放行。
+三仓共享同款基建模块（`rate_limit.py` / `observability.py` / `compliance.py` / `auth.py` / `audit.py` / `evals/gate.py`），CI 均为 **lint → test(3.10/3.12) → eval-gate → docker** 五 job 全绿才放行。
 
 ## 快速开始
 
@@ -83,6 +84,14 @@ docker compose up --build
 - 检索置信度低于阈值（0.82）不编造答案，固定兜底话术 + 就医建议；
 - 输入长度校验（500 字）+ 控制字符剥离，LLM 链路叠加 Prompt 注入拦截（指令覆盖 / 角色劫持 / 系统提示探测）；
 - 密钥仅从环境变量注入，代码与镜像零硬编码。
+
+## 平台安全（P4）
+
+- **API Key 双级鉴权**：普通 Key 走业务端点，管理 Key 才能动管理端点（重置 / 灰度发布 / 审批 / 迭代触发）；请求头 `X-API-Key`，未配置 Key 时本地开发自动放行；
+- **管理操作审计**：所有管理端点写 JSONL 审计日志（`logs/audit.jsonl`），记录操作者 Key 指纹（脱敏）、动作、对象与关联 request_id，不可篡改的只增文件；
+- **Skill 变更审批 gate**（bp-monitor）：`BP_APPROVAL_MODE=manual` 时技能进化动作不再自动生效，转入待审批队列并推送 `approval_pending` SSE 事件，经 `GET /approvals` 与 `POST /approvals/{id}/approve|reject` 人工处置，全程审计留痕；
+- **LLM 网关主备切换**（blood-pressure-agent）：全部 LLM 调用收敛到统一网关（埋点 + 重试 + 备链路），主链路故障自动切换；
+- **会话状态外置**（blood-pressure-agent）：会话存储可插拔（内存 / Redis），`docker compose --profile scale up` 拉起 Redis 后配置 `BP_REDIS_URL` 即可多副本水平扩展。
 
 ## License
 
