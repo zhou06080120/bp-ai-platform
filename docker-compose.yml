@@ -1,0 +1,68 @@
+# ═════════════════════════════════════════════════════════════════
+# 血压计 AI 客服平台 —— 一键拉起三个微服务
+#
+# 用法：把本仓库与三个子仓库 clone 到同一父目录，然后：
+#   docker compose up --build
+#
+# 目录结构约定（build 上下文指向兄弟目录）：
+#   parent-dir/
+#   ├── bp-ai-platform/            ← 本仓库（compose 与总览文档）
+#   ├── bp_monitor_service_agent/  ← 技能自进化监控 Agent
+#   ├── blood_pressure_agent/      ← ReAct 客服 Agent
+#   └── blodd_answer_piper/        ← FAQ 语义检索引擎
+#
+# 端口映射（容器内均为 8000，宿主机错开分配）：
+#   8001 → bp-monitor-service-agent   /stream/events（SSE 进度）+ /job/* + /metrics
+#   8002 → blood-pressure-agent       /query/manual|fc（SSE 流式回答）
+#   8003 → blodd-answer-piper         /query（两阶段混合检索）
+# ═════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── 技能自进化监控 Agent：评估客服会话质量并自动迭代 Skill ──────────────────
+  bp-monitor:
+    build:
+      context: ../bp_monitor_service_agent   # 兄弟目录构建
+    container_name: bp-monitor
+    ports:
+      - "8001:8000"                          # 宿主机 8001 → 容器 8000
+    environment:
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60} # 限流阈值（0=关闭）
+      - BP_LOG_FORMAT=${BP_LOG_FORMAT:-json} # 日志格式（json|text）
+    env_file:
+      - path: .env                           # 统一密钥注入（缺省不强制）
+        required: false
+    restart: unless-stopped
+
+  # ── ReAct 客服 Agent：面向用户的流式问答入口 ──────────────────────────────
+  blood-pressure-agent:
+    build:
+      context: ../blood_pressure_agent
+    container_name: blood-pressure-agent
+    ports:
+      - "8002:8000"
+    environment:
+      - BP_LLM_API_KEY=${BP_LLM_API_KEY:-}   # LLM 密钥（必须从环境注入，见 .env.example）
+      - BP_LLM_BASE_URL=${BP_LLM_BASE_URL:-}
+      - AGENT_MODEL=${AGENT_MODEL:-qwen-max}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
+      - BP_LOG_FORMAT=${BP_LOG_FORMAT:-json}
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+  # ── FAQ 语义检索引擎：Dense+BM25 混合检索 + CrossEncoder 精排 ───────────────
+  blodd-answer-piper:
+    build:
+      context: ../blodd_answer_piper
+    container_name: blodd-answer-piper
+    ports:
+      - "8003:8000"
+    environment:
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
+      - BP_LOG_FORMAT=${BP_LOG_FORMAT:-json}
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped

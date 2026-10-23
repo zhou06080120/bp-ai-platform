@@ -1,0 +1,26 @@
+# ═════════════════════════════════════════════════════════════════
+# CI：docker-compose 编排文件语法校验
+#
+# 设计要点：
+#   - 本仓库是平台总览（文档 + 编排），不放业务代码，
+#     CI 只需保证 docker-compose.yml 语法与插值始终有效
+#   - docker compose config 只做渲染校验，不要求兄弟仓库存在，
+#     但 GitHub runner 自带的 Compose 版本满足 env_file.required 语法
+# ═════════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  compose-check:
+    name: Compose config check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker compose config -q
